@@ -1,3 +1,8 @@
+// Package kvstoreredis is a Redis driver for github.com/igorsobreira/kvstore
+//
+// See Open() for the info format required to kvstore.New().
+//
+// Make sure you call kvstore.Close() after kvstore.New().
 package kvstoreredis
 
 import (
@@ -14,38 +19,46 @@ func init() {
 	kvstore.Register("redis", &Driver{})
 }
 
-// Driver implementes kvstore.Driver interface using Redis
-type Driver struct {
-	cli  redis.Conn
-	hash string
-}
+// Driver implementes kvstore.Driver interface
+type Driver struct{}
 
 // Open is called by kvstore.New, will open a connection to redis
 //
-// info format is: "tcp://localhost:6379?hash=foo&timeout=5s"
+// info format is: "tcp://localhost:6379?hash=foo&timeout=5s".
 //
-func (d *Driver) Open(info string) error {
+// where 'hash' is the HASH in redis where the keys will be stored
+func (d *Driver) Open(info string) (kvstore.Conn, error) {
 
 	network, address, hash, timeout, err := parseInfo(info)
 	if err != nil {
-		return err
+		return nil, err
 	}
+
+	var cli redis.Conn
 
 	if timeout != 0 {
-		d.cli, err = redis.DialTimeout(network, address, timeout, timeout, timeout)
+		cli, err = redis.DialTimeout(network, address, timeout, timeout, timeout)
 	} else {
-		d.cli, err = redis.Dial(network, address)
+		cli, err = redis.Dial(network, address)
 	}
 
-	d.hash = hash
+	if err != nil {
+		return nil, err
+	}
 
-	return err
+	return &Conn{cli, hash}, nil
 }
 
+// parseInfo parses the info provided to Driver.Open and returns the individual
+// items.
+//
+// note that both hash and timeout are option, so caller must verify if they
+// were provided.
+//
+// network is returned as "tcp", even though it was provided as a url scheme "tcp://".
 func parseInfo(info string) (network string, address string, hash string, timeout time.Duration, err error) {
 
 	var data *url.URL
-
 	data, err = url.Parse(info)
 
 	if err != nil {
@@ -69,30 +82,4 @@ func parseInfo(info string) (network string, address string, hash string, timeou
 		}
 	}
 	return
-}
-
-// Set key associated to value. Override existing value.
-func (d *Driver) Set(key string, value []byte) error {
-	_, err := d.cli.Do("HSET", d.hash, key, value)
-	return err
-}
-
-// Get value associated with key. Return kvstore.ErrNotFound if
-// key doesn't exist
-func (d *Driver) Get(key string) (value []byte, err error) {
-	reply, err := d.cli.Do("HGET", d.hash, key)
-	if reply == nil {
-		return value, kvstore.ErrNotFound
-	}
-	value, ok := reply.([]byte)
-	if !ok {
-		return value, fmt.Errorf("kvstore redis: invalid value found for %#v: %#v", key, reply)
-	}
-	return value, err
-}
-
-// Delete key. No-op if key not found.
-func (d *Driver) Delete(key string) error {
-	_, err := d.cli.Do("HDEL", d.hash, key)
-	return err
 }
